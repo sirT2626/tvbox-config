@@ -78,7 +78,7 @@ class Spider(Spider):
     global headers
 
     def getName(self):
-        return "é¦–é¡µ"
+        return "首页"
 
     def init(self, extend):
         pass
@@ -152,11 +152,11 @@ class Spider(Spider):
 
     def homeContent(self, filter):
         result = {}
-        result = {"class": [{"type_id": "1", "type_name": "å‰§åœº"},
-                            {"type_id": "3", "type_name": "æ–°å‰§"},
-                            {"type_id": "2", "type_name": "çƒ­æ’­"},
-                            {"type_id": "7", "type_name": "æ˜Ÿé€‰"},
-                            {"type_id": "5", "type_name": "é˜³å…‰"}],
+        result = {"class": [{"type_id": "1", "type_name": "剧场"},
+                            {"type_id": "3", "type_name": "新剧"},
+                            {"type_id": "2", "type_name": "热播"},
+                            {"type_id": "7", "type_name": "星选"},
+                            {"type_id": "5", "type_name": "阳光"}],
                   }
 
         return result
@@ -246,13 +246,13 @@ class Spider(Spider):
         name = self.extract_middle_text(code, "s1='", "'", 0)
         Jumps = self.extract_middle_text(code, "s2='", "'", 0)
 
-        content = 'å‰§æƒ…ï¼š' + data['data']['introduction']
+        content = '剧情：' + data['data']['introduction']
 
         area = data['data']['desc_tags'][0]
 
         remarks = data['data']['filing']
 
-        # ä¿®å¤å‰§é›†åªæœ‰ä¸€é›†çš„é—®é¢˜ - æ£€æŸ¥theatersæ•°æ®æ˜¯å¦å­˜åœ¨ä¸”ä¸ä¸ºç©º
+        # 修复剧集只有一集的问题 - 检查theaters数据是否存在且不为空
         if 'theaters' in data['data'] and data['data']['theaters']:
             for sou in data['data']['theaters']:
                 id = sou['son_video_url']
@@ -260,12 +260,12 @@ class Spider(Spider):
                 bofang = bofang + str(name) + '$' + id + '#'
 
             bofang = bofang[:-1] if bofang.endswith('#') else bofang
-            xianlu = 'æ˜ŸèŠ½'
+            xianlu = '星芽'
         else:
-            # å¦‚æžœæ²¡æœ‰theatersæ•°æ®ï¼Œæ£€æŸ¥æ˜¯å¦æœ‰å•ä¸ªè§†é¢‘URL
+            # 如果没有theaters数据，检查是否有单个视频URL
             if 'video_url' in data['data'] and data['data']['video_url']:
                 bofang = '1$' + data['data']['video_url']
-                xianlu = 'æ˜ŸèŠ½'
+                xianlu = '星芽'
             else:
                 bofang = Jumps
                 xianlu = '1'
