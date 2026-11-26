@@ -1,4 +1,4 @@
-import { Crypto, _ } from 'https://gh-proxy.com/https://raw.githubusercontent.com/sirT2626/tvbox-config/main/js/cat.js';
+import { Crypto, _ } from 'https://gh-proxy.com/https://raw.githubusercontent.com/sirT2626/tvbox-config/main/js/catlib.js';
  
 let siteUrl = '';
 let key = '';
