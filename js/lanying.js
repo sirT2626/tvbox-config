@@ -473,6 +473,10 @@ let thirdDanmuBaseUrl = '';
 let customPlayUa = '';
 let forceVerifyCode = null;
 
+// 默认隐藏的分类（按名称包含匹配）：体育、直播
+// 想改的话在 ext 里加 "hideCate": "体育,直播,少儿"；写空字符串则全部显示
+let hideCates = ['体育', '直播'];
+
 const PAGE_SIZE = 30;
 
 function logErr(tag, e) {
@@ -554,6 +558,12 @@ async function init(cfg) {
     }
     if (extObj.ua2 !== undefined) {
         customPlayUa = String(extObj.ua2).trim();
+    }
+    if (extObj.hideCate !== undefined) {
+        const raw = String(extObj.hideCate).trim();
+        hideCates = raw
+            ? raw.split(/[,，|]/).map(function (s) { return s.trim(); }).filter(function (s) { return !!s; })
+            : [];
     }
     if (extObj.head && typeof extObj.head === 'string') {
         const items = extObj.head.split(',');
@@ -672,6 +682,15 @@ async function home(filter) {
         const typeList = data.type_list || [];
         for (let i = 0; i < typeList.length; i++) {
             const item = typeList[i];
+
+            // 跳过被隐藏的分类（体育 / 直播 等），它们的推荐位也一并跳过
+            const typeName = item.type_name === undefined || item.type_name === null ? '' : String(item.type_name);
+            let hidden = false;
+            for (let h = 0; h < hideCates.length; h++) {
+                if (hideCates[h] && typeName.indexOf(hideCates[h]) > -1) { hidden = true; break; }
+            }
+            if (hidden) continue;
+
             if (item.type_id > 0 && Array.isArray(item.recommend_list)) {
                 homeVods = homeVods.concat(item.recommend_list);
             }
