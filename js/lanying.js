@@ -347,6 +347,12 @@ async function detail(id) {
             urls: source.urls 
         };
     });
+    // 去掉“蓝光”线路：该线路解析经常返回空地址，播放器默认选中它会黑屏
+    // 若过滤后一条不剩（个别影片只有蓝光线路），则保留原列表，避免完全无法播放
+    const noBluRay = playSources.filter(source => !String(source.show).includes('蓝光'));
+    if (noBluRay.length > 0) {
+        playSources = noBluRay;
+    }
     playSources.sort((a, b) => {
         const aShow = a.show.toLowerCase();
         const bShow = b.show.toLowerCase();
