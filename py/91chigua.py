@@ -110,6 +110,27 @@ class Spider(BaseSpider):
             return p
         return f"{self.host.rstrip('/')}/{p.lstrip('/')}"
 
+    def _clean_classes(self, classes):
+        """导航栏里混进了两类无效项，都要清掉：
+        1) 静态页——/app.html、/faq.html、/twitter.html 等，点进去没有列表，只保留 /category/* 和首页
+        2) 下拉父项——同一 tid 会同时出现父项「深夜撸片 海角乱伦 91探花」和子项「深夜撸片」，
+           按 tid 去重，保留名字最短的那个（父项是多项拼接，一定更长）"""
+        best = {}
+        order = []
+        for c in classes:
+            tid = (c.get('type_id') or '').strip()
+            name = (c.get('type_name') or '').strip()
+            if not tid or not name:
+                continue
+            if tid != '/' and not tid.startswith('/category/'):
+                continue
+            if tid not in best:
+                best[tid] = c
+                order.append(tid)
+            elif len(name) < len((best[tid].get('type_name') or '')):
+                best[tid] = c
+        return [best[t] for t in order]
+
     def _detect_page_pat(self, html):
         """从第一页 HTML 里找指向第 2 页的站内链接，反推该栏目的翻页模板。
         不能只认 page-navigator：求瓜心愿墙用的是 contribution-pagination，
@@ -169,8 +190,10 @@ class Spider(BaseSpider):
                     classes.append({'type_name': name, 'type_id': href})
                 if classes: break
             
+            classes = self._clean_classes(classes)
+
             if not classes:
-                classes = [{'type_name': '最新', 'type_id': '/latest/'}, {'type_name': '热门', 'type_id': '/hot/'}]
+                classes = [{'type_name': '最新', 'type_id': '/'}]
             
             return {'class': classes, 'list': self.getlist(data('#index article, article'))}
         except Exception as e:
