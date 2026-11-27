@@ -18,7 +18,9 @@ img_cache = {}
 class Spider(BaseSpider):
 
     # 站点域名，按实测稳定性排序；探测不通会自动切下一个
-    DOMAINS = ['https://adopt.ybejhul.com/', 'https://but.ybejhul.com/']
+    # 2026-11-27 实测：but.zhqyhkzj.cc 国内可直连（1.6s/200）；but.ybejhul.com 已 301 跳新域名，
+    # 保留作兜底；adopt.ybejhul.com 间歇 NXDOMAIN 已移除；91cg1.com 已被 DNS 污染不可用。
+    DOMAINS = ['https://but.zhqyhkzj.cc/', 'https://but.ybejhul.com/']
     _good_host = ''       # 最近一次探测成功的域名（类级，进程内复用）
     _good_ts = 0.0
     _html_cache = None    # (host, ts, html)，首页只请求一次
@@ -51,7 +53,8 @@ class Spider(BaseSpider):
             'Cache-Control': 'no-cache',
         }
         self.host = self.get_working_host()
-        self.headers.update({'Origin': self.host, 'Referer': f"{self.host}/"})
+        _origin = self.host.rstrip('/')
+        self.headers.update({'Origin': _origin, 'Referer': f"{_origin}/"})
         print(f"使用站点: {self.host}")
 
     def getName(self):
@@ -97,6 +100,14 @@ class Spider(BaseSpider):
             if url != cur:
                 return url
         return ''
+
+    def _url(self, path):
+        """统一拼绝对地址。self.host 带尾斜杠、站内 href 带首斜杠，直接拼会得到 //，
+        而该站点对 //category/ 返回 404，必须在这里规范化。"""
+        p = str(path or '').strip()
+        if p.startswith('http'):
+            return p
+        return f"{self.host.rstrip('/')}/{p.lstrip('/')}"
 
     def _get(self, url, timeout=12):
         """请求失败时自动切换到备用域名重试一次"""
@@ -170,13 +181,13 @@ class Spider(BaseSpider):
             if tid.startswith('http'):
                 base_url = tid.rstrip('/')
             else:
-                path = tid if tid.startswith('/') else f"/{tid}"
-                base_url = f"{self.host}{path}".rstrip('/')
+                base_url = self._url(tid).rstrip('/')
             
+            # 该站点分页是 /page/N/（旧写法 /N/ 已 404，2026-11 实测）
             if pg == 1:
                 url = f"{base_url}/"
             else:
-                url = f"{base_url}/{pg}/"
+                url = f"{base_url}/page/{pg}/"
                 
             response = self._get(url, timeout=12)
             if response.status_code != 200: return {'list': [], 'page': pg, 'pagecount': 9999, 'limit': 90, 'total': 0}
@@ -190,7 +201,7 @@ class Spider(BaseSpider):
 
     def detailContent(self, ids):
         try:
-            url = ids[0] if ids[0].startswith('http') else f"{self.host}{ids[0]}"
+            url = self._url(ids[0])
             response = self._get(url, timeout=12)
             data = self.getpq(response.text)
             
@@ -236,8 +247,7 @@ class Spider(BaseSpider):
                         ep_name = link_text.replace('点击观看：', '').replace('点击观看', '').strip()
                         if not ep_name: ep_name = f"视频{i}"
                         
-                        if not link_href.startswith('http'):
-                            link_href = f"{self.host}{link_href}" if link_href.startswith('/') else f"{self.host}/{link_href}"
+                        link_href = self._url(link_href)
                         
                         plist.append(f"{ep_name}${link_href}")
             
@@ -297,9 +307,9 @@ class Spider(BaseSpider):
             pg = int(pg) if pg else 1
             
             if pg == 1:
-                url = f"{self.host}/search/{key}/"
+                url = self._url(f"/search/{key}/")
             else:
-                url = f"{self.host}/search/{key}/{pg}/"
+                url = self._url(f"/search/{key}/{pg}/")
             
             response = self._get(url, timeout=12)
             return {'list': self.getlist(self.getpq(response.text)('article')), 'page': pg, 'pagecount': 9999}
@@ -397,7 +407,7 @@ class Spider(BaseSpider):
         return videos
 
     def getfod(self, id):
-        url = f"{self.host}{id}"
+        url = self._url(id)
         data = self.getpq(self._get(url, timeout=12).text)
         videos = []
         for i, h2 in enumerate(data('.post-content h2').items()):
@@ -448,8 +458,7 @@ class Spider(BaseSpider):
                 img_cache[key] = raw
                 return f"{self.getProxyUrl()}&type=cache&key={key}"
             except: return ""
-        if not url.startswith('http'):
-            url = f"{self.host}{url}" if url.startswith('/') else f"{self.host}/{url}"
+        url = self._url(url)
         return f"{self.getProxyUrl()}&url={self.e64(url)}&type=img"
 
     def getpq(self, data):
