@@ -24,6 +24,7 @@ class Spider(BaseSpider):
     _good_host = ''       # 最近一次探测成功的域名（类级，进程内复用）
     _good_ts = 0.0
     _html_cache = None    # (host, ts, html)，首页只请求一次
+    _page_pat = {}        # base_url -> 该栏目的翻页模板，如 '/2/{pg}/' 或 '/page/{pg}/'
     HOST_TTL = 300        # 成功域名缓存 5 分钟
     PROBE_TIMEOUT = 6     # 单域名探测超时
 
@@ -109,6 +110,19 @@ class Spider(BaseSpider):
             return p
         return f"{self.host.rstrip('/')}/{p.lstrip('/')}"
 
+    def _detect_page_pat(self, html):
+        """从第一页 HTML 里找指向第 2 页的站内链接，反推该栏目的翻页模板。
+        不能只认 page-navigator：求瓜心愿墙用的是 contribution-pagination，
+        且普通分类是 /N/、wish 是 /page/N/，直接扫 href 最可靠。"""
+        for rx in (r'href="(/[^"?#]*page/2/)"', r'href="(/[^"?#]*/2/)"'):
+            m = re.search(rx, html or '')
+            if m:
+                href = m.group(1)
+                i = href.rfind('2/')
+                if i > 0:
+                    return href[:i] + '{pg}/'
+        return ''
+
     def _get(self, url, timeout=12):
         """请求失败时自动切换到备用域名重试一次"""
         try:
@@ -183,16 +197,39 @@ class Spider(BaseSpider):
             else:
                 base_url = self._url(tid).rstrip('/')
             
-            # 该站点分页是 /page/N/（旧写法 /N/ 已 404，2026-11 实测）
+            # 各栏目分页规则不统一（2026-11-27 实测）：
+            #   首页 /            -> /page/N/
+            #   普通分类          -> /N/
+            #   求瓜心愿墙 wish   -> /page/N/
+            # 因此从第一页 HTML 反推模板并缓存，不再硬编码。
+            pat = Spider._page_pat.get(base_url, '')
             if pg == 1:
                 url = f"{base_url}/"
+            elif pat:
+                url = self._url(pat.format(pg=pg))
             else:
-                url = f"{base_url}/page/{pg}/"
-                
+                url = f"{base_url}/{pg}/"
+
             response = self._get(url, timeout=12)
+
+            # 模板猜错时换另一种写法重试一次
+            if pg > 1 and (response.status_code != 200 or '<article' not in response.text):
+                alt = f"{base_url}/page/{pg}/" if '/page/' not in url else f"{base_url}/{pg}/"
+                r2 = self._get(alt, timeout=12)
+                if r2.status_code == 200 and '<article' in r2.text:
+                    response = r2
+                    Spider._page_pat[base_url] = '/page/{pg}/' if '/page/' in alt else '/{pg}/'
+
             if response.status_code != 200: return {'list': [], 'page': pg, 'pagecount': 9999, 'limit': 90, 'total': 0}
-                
+
             data = self.getpq(response.text)
+
+            # 第一页顺便把该栏目的翻页模板记下来，后续翻页零探测
+            if pg == 1 and base_url not in Spider._page_pat:
+                p = self._detect_page_pat(response.text)
+                if p:
+                    Spider._page_pat[base_url] = p
+
             videos = self.getlist(data('#archive article, #index article, article'), tid)
             
             return {'list': videos, 'page': pg, 'pagecount': 9999, 'limit': 90, 'total': 999999}
