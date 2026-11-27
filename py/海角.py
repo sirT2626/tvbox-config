@@ -273,11 +273,17 @@ class Spider(Spider):
             image_url = str(param.get('url') or '').strip()
             if image_type == 'himg':
                 post_id = re.sub(r'\D+', '', str(param.get('id') or ''))
-                if not post_id:
-                    raise ValueError('缺少帖子 ID')
-                image_url = self.cover_cache.get(post_id, '')
-                if not image_url:
-                    response = self._request('%s/archives/%s/' % (self.host, post_id))
+                # 列表/搜索已经把缩略图带过来了，优先直取，避免每张封面都去抓一次详情页
+                if not image_url and post_id:
+                    image_url = self.cover_cache.get(post_id, '')
+                if image_url:
+                    if post_id:
+                        self.cover_cache[post_id] = image_url
+                else:
+                    if not post_id:
+                        raise ValueError('缺少帖子 ID')
+                    # 仅在完全没有缩略图时才回退抓详情页，超时收紧避免阻塞队列
+                    response = self._request('%s/archives/%s/' % (self.host, post_id), timeout=12)
                     urls = self._content_image_urls(self._doc(response.text), response.url)
                     if not urls:
                         raise ValueError('帖子没有封面')
@@ -484,9 +490,12 @@ class Spider(Spider):
 
     def _stable_cover(self, post_id, fallback=''):
         if post_id:
+            url = self.getProxyUrl() + '&type=himg&id=' + quote(str(post_id), safe='')
             if fallback:
                 self.cover_cache[str(post_id)] = str(fallback)
-            return self.getProxyUrl() + '&type=himg&id=' + quote(str(post_id), safe='')
+                # 把缩略图地址一并带上，代理侧拿到就不必再抓详情页
+                url += '&url=' + quote(str(fallback), safe='')
+            return url
         return self._proxy_image(fallback) if fallback else ''
 
     def _proxy_image(self, url):
