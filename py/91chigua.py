@@ -25,6 +25,12 @@ class Spider(BaseSpider):
     _good_ts = 0.0
     _html_cache = None    # (host, ts, html)，首页只请求一次
     _page_pat = {}        # base_url -> 该栏目的翻页模板，如 '/2/{pg}/' 或 '/page/{pg}/'
+    # 挂在 /category/ 下但不是文章列表的页面，点进去恒为空，直接隐藏
+    # 2026-11-27 实测：两者均返回 200 但 0 个 <article>
+    HIDE_CATES = {
+        '/category/sstp/',          # 实时监控 —— 视频流页面
+        '/category/contribution/',  # 投稿中心 —— 投稿表单页
+    }
     HOST_TTL = 300        # 成功域名缓存 5 分钟
     PROBE_TIMEOUT = 6     # 单域名探测超时
 
@@ -111,10 +117,11 @@ class Spider(BaseSpider):
         return f"{self.host.rstrip('/')}/{p.lstrip('/')}"
 
     def _clean_classes(self, classes):
-        """导航栏里混进了两类无效项，都要清掉：
+        """导航栏里混进了三类无效项，都要清掉：
         1) 静态页——/app.html、/faq.html、/twitter.html 等，点进去没有列表，只保留 /category/* 和首页
         2) 下拉父项——同一 tid 会同时出现父项「深夜撸片 海角乱伦 91探花」和子项「深夜撸片」，
-           按 tid 去重，保留名字最短的那个（父项是多项拼接，一定更长）"""
+           按 tid 去重，保留名字最短的那个（父项是多项拼接，一定更长）
+        3) 挂在 /category/ 下但不是文章列表的页面，见 HIDE_CATES"""
         best = {}
         order = []
         for c in classes:
@@ -123,6 +130,8 @@ class Spider(BaseSpider):
             if not tid or not name:
                 continue
             if tid != '/' and not tid.startswith('/category/'):
+                continue
+            if tid.rstrip('/') + '/' in Spider.HIDE_CATES:
                 continue
             if tid not in best:
                 best[tid] = c
