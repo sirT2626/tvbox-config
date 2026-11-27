@@ -268,6 +268,7 @@ class Spider(Spider):
             return self._media_proxy(param, image_type)
         if image_type not in ('img', 'himg'):
             return [404, 'text/plain; charset=utf-8', b'not found']
+        image_url = ''
         try:
             image_url = str(param.get('url') or '').strip()
             if image_type == 'himg':
@@ -295,11 +296,27 @@ class Spider(Spider):
                 verify=False,
             )
             encrypted.raise_for_status()
-            image = self._decrypt_image(encrypted.content)
+            raw = encrypted.content
+
+            # 站点新图（upload-images 等路径）是明文，旧图才加密；
+            # 先认魔数：已经是图就直接透传，避免明文被拿去解密后变成乱码
+            if self._looks_image(raw):
+                return [200, self._mime(raw), raw]
+
+            image = b''
+            try:
+                image = self._decrypt_image(raw)
+            except Exception:
+                image = b''
+            if not self._looks_image(image):
+                image = raw
             return [200, self._mime(image), image]
         except Exception as error:
             self.log('HJSQN 图片代理失败: %s' % error)
-            return [500, 'text/plain; charset=utf-8', b'image proxy failed']
+            # 回源交给播放器/图片加载器自己取，比返回 500 裂图更有机会出图
+            if image_url:
+                return [302, 'text/plain; charset=utf-8', b'', {'Location': image_url}]
+            return [404, 'text/plain; charset=utf-8', b'image not found']
 
     def _media_proxy(self, param, media_type):
         media_url = str(param.get('url') or '').strip()
@@ -572,6 +589,20 @@ class Spider(Spider):
             return default
 
     @staticmethod
+    def _looks_image(data):
+        """按文件头判断是否已是可渲染的图片，用于区分明文图与加密图"""
+        if not data:
+            return False
+        return (
+            data.startswith(b'\xff\xd8')                       # JPEG
+            or data.startswith(b'\x89PNG')                     # PNG
+            or data.startswith(b'GIF8')                        # GIF
+            or data[:2] == b'BM'                               # BMP
+            or (data.startswith(b'RIFF') and data[8:12] == b'WEBP')
+            or (len(data) > 12 and data[4:8] == b'ftyp')       # AVIF / HEIC
+        )
+
+    @staticmethod
     def _mime(data):
         if data.startswith(b'\x89PNG'):
             return 'image/png'
@@ -579,6 +610,8 @@ class Spider(Spider):
             return 'image/gif'
         if data.startswith(b'RIFF') and data[8:12] == b'WEBP':
             return 'image/webp'
+        if len(data) > 12 and data[4:8] == b'ftyp':
+            return 'image/avif'
         if data.startswith(b'\xff\xd8'):
             return 'image/jpeg'
         return 'application/octet-stream'
