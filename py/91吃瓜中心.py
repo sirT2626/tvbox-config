@@ -1,6 +1,7 @@
 import json
 import re
 import sys
+import time
 import hashlib
 from base64 import b64decode, b64encode
 from urllib.parse import urlparse
@@ -16,11 +17,32 @@ img_cache = {}
 
 class Spider(BaseSpider):
 
+    # 站点域名，按实测稳定性排序；探测不通会自动切下一个
+    DOMAINS = ['https://adopt.ybejhul.com/', 'https://but.ybejhul.com/']
+    _good_host = ''       # 最近一次探测成功的域名（类级，进程内复用）
+    _good_ts = 0.0
+    _html_cache = None    # (host, ts, html)，首页只请求一次
+    HOST_TTL = 300        # 成功域名缓存 5 分钟
+    PROBE_TIMEOUT = 6     # 单域名探测超时
+
     def init(self, extend=""):
         try:
-            self.proxies = json.loads(extend)
-        except:
+            cfg = json.loads(extend) if isinstance(extend, str) and extend.strip() else {}
+        except Exception:
+            cfg = {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+
+        # ext 支持 {"host": "https://xxx", "proxy": {"http": "...", "https": "..."}}
+        # 同时兼容旧写法：ext 直接就是代理字典 {"http": "...", "https": "..."}
+        if 'proxy' in cfg:
+            proxy = cfg.get('proxy')
+            self.proxies = proxy if isinstance(proxy, dict) else {}
+        elif 'http' in cfg or 'https' in cfg:
+            self.proxies = {k: v for k, v in (('http', cfg.get('http')), ('https', cfg.get('https'))) if v}
+        else:
             self.proxies = {}
+        self.forced_host = str(cfg.get('host') or '').strip().rstrip('/')
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -46,24 +68,70 @@ class Spider(BaseSpider):
         img_cache.clear()
 
     def get_working_host(self):
-        dynamic_urls = [
-            'https://but.ybejhul.com/',
-            'https://adopt.ybejhul.com'
-        ]
-        for url in dynamic_urls:
+        # 1) ext 指定了域名就不探测，避免拖慢 init
+        if getattr(self, 'forced_host', ''):
+            return self.forced_host + '/'
+
+        # 2) 5 分钟内成功过的域名直接用
+        if Spider._good_host and time.time() - Spider._good_ts < self.HOST_TTL:
+            return Spider._good_host
+
+        # 3) 依次探测，6 秒超时，失败立刻换下一个
+        for url in self.DOMAINS:
             try:
-                response = requests.get(url, headers=self.headers, proxies=self.proxies, timeout=10)
+                response = requests.get(url, headers=self.headers, proxies=self.proxies,
+                                        timeout=self.PROBE_TIMEOUT)
                 if response.status_code == 200:
+                    Spider._good_host = url
+                    Spider._good_ts = time.time()
                     return url
             except Exception:
                 continue
-        return dynamic_urls[0]
+
+        # 4) 全部失败：优先沿用上次成功的，其次第一个
+        return Spider._good_host or self.DOMAINS[0]
+
+    def _alt_host(self):
+        cur = self.host.rstrip('/') + '/'
+        for url in self.DOMAINS:
+            if url != cur:
+                return url
+        return ''
+
+    def _get(self, url, timeout=12):
+        """请求失败时自动切换到备用域名重试一次"""
+        try:
+            return requests.get(url, headers=self.headers, proxies=self.proxies, timeout=timeout)
+        except Exception:
+            old = self.host.rstrip('/')
+            alt = self._alt_host()
+            if not alt:
+                raise
+            alt = alt.rstrip('/')
+            Spider._good_host = alt + '/'
+            Spider._good_ts = time.time()
+            self.host = alt
+            self.headers.update({'Origin': alt, 'Referer': f"{alt}/"})
+            print(f"切换站点: {old} -> {alt}")
+            return requests.get(url.replace(old, alt, 1), headers=self.headers,
+                                proxies=self.proxies, timeout=timeout)
+
+    def _home_html(self, timeout=12):
+        """首页 HTML 缓存 2 分钟，homeContent 与 homeVideoContent 共用一次请求"""
+        cache = Spider._html_cache
+        if cache and cache[0] == self.host and time.time() - cache[1] < 120:
+            return cache[2]
+        response = self._get(self.host, timeout=timeout)
+        if response.status_code != 200:
+            return ''
+        Spider._html_cache = (self.host, time.time(), response.text)
+        return response.text
 
     def homeContent(self, filter):
         try:
-            response = requests.get(self.host, headers=self.headers, proxies=self.proxies, timeout=15)
-            if response.status_code != 200: return {'class': [], 'list': []}
-            data = self.getpq(response.text)
+            text = self._home_html()
+            if not text: return {'class': [], 'list': []}
+            data = self.getpq(text)
             
             classes = []
             category_selectors = ['.category-list ul li', '.nav-menu li', '.menu li', 'nav ul li']
@@ -85,10 +153,9 @@ class Spider(BaseSpider):
 
     def homeVideoContent(self):
         try:
-            response = requests.get(self.host, headers=self.headers, proxies=self.proxies, timeout=15)
-            if response.status_code != 200: return {'list': []}
-            data = self.getpq(response.text)
-            return {'list': self.getlist(data('#index article, article'))}
+            text = self._home_html()
+            if not text: return {'list': []}
+            return {'list': self.getlist(self.getpq(text)('#index article, article'))}
         except Exception as e:
             return {'list': []}
 
@@ -111,7 +178,7 @@ class Spider(BaseSpider):
             else:
                 url = f"{base_url}/{pg}/"
                 
-            response = requests.get(url, headers=self.headers, proxies=self.proxies, timeout=15)
+            response = self._get(url, timeout=12)
             if response.status_code != 200: return {'list': [], 'page': pg, 'pagecount': 9999, 'limit': 90, 'total': 0}
                 
             data = self.getpq(response.text)
@@ -124,7 +191,7 @@ class Spider(BaseSpider):
     def detailContent(self, ids):
         try:
             url = ids[0] if ids[0].startswith('http') else f"{self.host}{ids[0]}"
-            response = requests.get(url, headers=self.headers, proxies=self.proxies, timeout=15)
+            response = self._get(url, timeout=12)
             data = self.getpq(response.text)
             
             plist = []
@@ -234,7 +301,7 @@ class Spider(BaseSpider):
             else:
                 url = f"{self.host}/search/{key}/{pg}/"
             
-            response = requests.get(url, headers=self.headers, proxies=self.proxies, timeout=15)
+            response = self._get(url, timeout=12)
             return {'list': self.getlist(self.getpq(response.text)('article')), 'page': pg, 'pagecount': 9999}
         except:
             return {'list': [], 'page': pg, 'pagecount': 9999}
@@ -331,7 +398,7 @@ class Spider(BaseSpider):
 
     def getfod(self, id):
         url = f"{self.host}{id}"
-        data = self.getpq(requests.get(url, headers=self.headers, proxies=self.proxies).text)
+        data = self.getpq(self._get(url, timeout=12).text)
         videos = []
         for i, h2 in enumerate(data('.post-content h2').items()):
             p_txt = data('.post-content p').eq(i * 2)
